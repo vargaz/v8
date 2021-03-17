@@ -137,6 +137,15 @@ RUNTIME_FUNCTION(Runtime_ThrowWasmError) {
   return ThrowWasmError(isolate, MessageTemplateFromInt(message_id));
 }
 
+RUNTIME_FUNCTION(Runtime_ThrowWasmError2) {
+  ClearThreadInWasmScope flag_scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_SMI_ARG_CHECKED(message_id, 0);
+  CONVERT_UINT32_ARG_CHECKED(val, 1);
+  printf ("FUNCTION TABLE INDEX: %d\n", val / 4);
+  return ThrowWasmError(isolate, MessageTemplateFromInt(message_id));
+}
+
 RUNTIME_FUNCTION(Runtime_ThrowWasmStackOverflow) {
   ClearThreadInWasmScope clear_wasm_flag(isolate);
   SealHandleScope shs(isolate);

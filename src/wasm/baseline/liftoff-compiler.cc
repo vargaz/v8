@@ -422,13 +422,14 @@ class LiftoffCompiler {
     // These two pointers will only be used for debug code:
     SpilledRegistersForInspection* spilled_registers;
     DebugSideTableBuilder::EntryBuilder* debug_sidetable_entry_builder;
+    Register arg;
 
     // Named constructors:
     static OutOfLineCode Trap(
         WasmCode::RuntimeStubId s, WasmCodePosition pos,
         SpilledRegistersForInspection* spilled_registers,
         OutOfLineSafepointInfo* safepoint_info, uint32_t pc,
-        DebugSideTableBuilder::EntryBuilder* debug_sidetable_entry_builder) {
+        DebugSideTableBuilder::EntryBuilder* debug_sidetable_entry_builder, Register reg) {
       DCHECK_LT(0, pos);
       return {
           {},                            // label
@@ -440,7 +441,8 @@ class LiftoffCompiler {
           safepoint_info,                // safepoint_info
           pc,                            // pc
           spilled_registers,             // spilled_registers
-          debug_sidetable_entry_builder  // debug_side_table_entry_builder
+          debug_sidetable_entry_builder,  // debug_side_table_entry_builder
+          reg
       };
     }
     static OutOfLineCode StackCheck(
@@ -458,7 +460,8 @@ class LiftoffCompiler {
           safepoint_info,                // safepoint_info
           0,                             // pc
           spilled_regs,                  // spilled_registers
-          debug_sidetable_entry_builder  // debug_side_table_entry_builder
+          debug_sidetable_entry_builder,  // debug_side_table_entry_builder
+          no_reg
       };
     }
   };
@@ -833,6 +836,8 @@ class LiftoffCompiler {
     const bool is_stack_check = ool->stub == WasmCode::kWasmStackGuard;
     const bool is_mem_out_of_bounds =
         ool->stub == WasmCode::kThrowWasmTrapMemOutOfBounds;
+    const bool is_sig_mismatch =
+        ool->stub == WasmCode::kThrowWasmTrapFuncSigMismatch;
 
     if (is_mem_out_of_bounds && env_->use_trap_handler) {
       uint32_t pc = static_cast<uint32_t>(__ pc_offset());
@@ -866,6 +871,19 @@ class LiftoffCompiler {
 
     source_position_table_builder_.AddPosition(
         __ pc_offset(), SourcePosition(ool->position), true);
+
+    if (is_sig_mismatch) {
+        compiler::CallDescriptor* call_descriptor =
+            GetBuiltinCallDescriptor<ThrowWasmTrapFuncSigMismatchDescriptor>(
+            compilation_zone_);
+        auto sig = MakeSig()
+            .Returns(kPointerKind)
+            .Params(kI32);
+        LiftoffAssembler::VarState arg(kI32, LiftoffRegister (ool->arg), 0);
+        __ PrepareBuiltinCall(&sig, call_descriptor,
+                              {arg});
+    }
+
     __ CallRuntimeStub(ool->stub);
     Safepoint safepoint = safepoint_table_builder_.DefineSafepoint(&asm_);
 
@@ -2553,7 +2571,7 @@ class LiftoffCompiler {
   }
 
   Label* AddOutOfLineTrap(FullDecoder* decoder, WasmCode::RuntimeStubId stub,
-                          uint32_t pc = 0) {
+                          uint32_t pc = 0, Register arg_reg = no_reg) {
     DCHECK(FLAG_wasm_bounds_checks);
     OutOfLineSafepointInfo* safepoint_info = nullptr;
     if (V8_UNLIKELY(for_debugging_)) {
@@ -2571,7 +2589,7 @@ class LiftoffCompiler {
         stub, decoder->position(),
         V8_UNLIKELY(for_debugging_) ? GetSpilledRegistersForInspection()
                                     : nullptr,
-        safepoint_info, pc, RegisterOOLDebugSideTableEntry(decoder)));
+        safepoint_info, pc, RegisterOOLDebugSideTableEntry(decoder), arg_reg));
     return out_of_line_code_.back().label.get();
   }
 
@@ -5470,7 +5488,7 @@ class LiftoffCompiler {
     __ LoadConstant(LiftoffRegister(tmp_const), WasmValue(canonical_sig_num));
 
     Label* sig_mismatch_label =
-        AddOutOfLineTrap(decoder, WasmCode::kThrowWasmTrapFuncSigMismatch);
+        AddOutOfLineTrap(decoder, WasmCode::kThrowWasmTrapFuncSigMismatch, 0, index);
     __ emit_cond_jump(kUnequal, sig_mismatch_label, kPointerKind, scratch,
                       tmp_const);
 
